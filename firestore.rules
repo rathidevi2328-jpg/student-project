@@ -1,0 +1,117 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && getUserData().role == 'admin';
+    }
+    
+    function isFaculty() {
+      return isAuthenticated() && getUserData().role == 'faculty';
+    }
+    
+    function isStudent() {
+      return isAuthenticated() && getUserData().role == 'student';
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // USERS COLLECTION
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      // Only Admin can modify user roles or create new users
+      allow create, update, delete: if isAdmin() || (isOwner(userId) && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'isActive']));
+    }
+
+    // STUDENTS COLLECTION
+    match /students/{studentId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // FACULTY COLLECTION
+    match /faculty/{facultyId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // DEPARTMENTS COLLECTION
+    match /departments/{departmentId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // SUBJECTS COLLECTION
+    match /subjects/{subjectId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // CLASSES COLLECTION
+    match /classes/{classId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // ATTENDANCE SESSIONS
+    match /attendanceSessions/{sessionId} {
+      allow read: if isAuthenticated();
+      // Faculty who created the session or Admin can write
+      allow create: if isAdmin() || isFaculty();
+      allow update, delete: if isAdmin() || (isFaculty() && resource.data.facultyId == getUserData().facultyId);
+    }
+
+    // ATTENDANCE RECORDS
+    match /attendance/{attendanceId} {
+      // Students can only read their own attendance records
+      // Faculty can read attendance for their classes/subjects
+      // Admin can read all
+      allow read: if isAdmin() || 
+                     (isFaculty() && resource.data.facultyId == getUserData().facultyId) ||
+                     (isStudent() && resource.data.studentId == getUserData().studentId);
+                     
+      // Students CANNOT directly modify or delete attendance records
+      // Attendance can be created by Faculty or by student submitting via valid verified session
+      allow create: if isAdmin() || isFaculty() || (
+        isStudent() && 
+        request.resource.data.studentId == getUserData().studentId &&
+        request.resource.data.status in ['Present', 'Late']
+      );
+      
+      // Only Admin or Faculty can update or delete attendance records
+      allow update, delete: if isAdmin() || (isFaculty() && resource.data.facultyId == getUserData().facultyId);
+    }
+
+    // NOTIFICATIONS
+    match /notifications/{notificationId} {
+      // Users can read and mark their own notifications as read
+      allow read: if isAuthenticated() && (isAdmin() || resource.data.userId == request.auth.uid);
+      allow update: if isAuthenticated() && (isAdmin() || (resource.data.userId == request.auth.uid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read'])));
+      allow create, delete: if isAdmin() || isFaculty();
+    }
+
+    // AUDIT LOGS
+    match /auditLogs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isAuthenticated();
+      allow update, delete: if false; // immutable audit log
+    }
+
+    // SYSTEM SETTINGS
+    match /systemSettings/{settingId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+  }
+}
